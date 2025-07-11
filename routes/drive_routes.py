@@ -60,19 +60,28 @@ def upload():
 
     return jsonify(results), 207 if any(r["result"].startswith("❌") for r in results) else 200
 
-# === List Files ===
-@drive_bp.route("/files", methods=["GET"])
+# === List Files ===@drive_bp.route("/files", methods=["GET"])
 def list_files():
     try:
         raw_files = list_files_in_b2()
         result = []
 
+        logger.info(f"📦 Total files fetched from B2: {len(raw_files)}")
+
         for obj in raw_files:
-            key = obj.get("Key")
-            size = obj.get("Size", 0)
-            if not key or key.startswith(".") or key.endswith("/"):
+            key = obj.get("filename") or obj.get("Key")
+            size = obj.get("size") or obj.get("Size", 0)
+
+            if not key:
+                logger.warning("⚠️ Skipping file with empty key.")
                 continue
 
+            # ⛔ Skip folder keys
+            if key.endswith("/"):
+                logger.info(f"📁 Skipping folder key: {key}")
+                continue
+
+            # 🔍 Type detection
             ext = os.path.splitext(key)[1].lower()
             if ext in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]:
                 file_type = "image"
@@ -92,6 +101,12 @@ def list_files():
                 file_type = "file"
 
             download_url = get_file_download_url(key)
+            if not download_url or isinstance(download_url, dict):
+                logger.warning(f"❌ No download URL for: {key}")
+                continue
+
+            logger.info(f"✅ File: {key} | Type: {file_type} | Size: {size}")
+
             result.append({
                 "filename": key,
                 "type": file_type,
@@ -99,11 +114,13 @@ def list_files():
                 "download_url": download_url
             })
 
+        logger.info(f"✅ Returning {len(result)} valid files to client.")
         return jsonify(result), 200
 
     except Exception as e:
-        logger.error(f"❌ Error listing files: {e}")
+        logger.error(f"❌ Error listing files: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
 
 # === Download URL ===
 @drive_bp.route("/download/<filename>", methods=["GET"])
