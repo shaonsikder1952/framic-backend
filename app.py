@@ -1,17 +1,29 @@
-from flask import Flask, jsonify
-from flask_cors import CORS
-from routes.drive_routes import drive_bp
+from flask import Flask, request, jsonify
+from werkzeug.utils import secure_filename
+import os
 
 app = Flask(__name__)
-CORS(app)  # ✅ This allows cross-origin requests
+UPLOAD_FOLDER = "uploads"
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
-app.register_blueprint(drive_bp, url_prefix="/api")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-@app.route('/')
-def home():
-    return jsonify({"message": "Framic Backend is running."})
+@app.route("/upload", methods=["POST"])
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
 
-if __name__ == '__main__':
-    import os
-    port = int(os.environ.get('PORT', 5050))
-    app.run(host='0.0.0.0', port=port)
+    filename = secure_filename(file.filename)
+    file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+    return jsonify({"message": "File uploaded", "filename": filename}), 200
+
+@app.route("/files", methods=["GET"])
+def list_files():
+    files = os.listdir(app.config["UPLOAD_FOLDER"])
+    return jsonify([{"name": f, "type": f.split('.')[-1]} for f in files]), 200
+
+if __name__ == "__main__":
+    app.run(debug=True)
