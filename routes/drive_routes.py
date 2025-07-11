@@ -24,7 +24,7 @@ if not os.path.exists(TEMP_DIR):
 
 
 # 🚀 Upload Route
-@drive_bp.route("/drive/upload", methods=["POST"])
+@drive_bp.route("/upload", methods=["POST"])
 def upload():
     files = request.files.getlist("file")
     if not files:
@@ -64,7 +64,7 @@ def upload():
 
 
 # 📂 List Files
-@drive_bp.route("/drive/files", methods=["GET"])
+@drive_bp.route("/files", methods=["GET"])
 def list_files():
     try:
         files = list_files_in_b2()
@@ -75,7 +75,7 @@ def list_files():
 
 
 # ⬇️ Generate Download URL
-@drive_bp.route("/drive/download/<filename>", methods=["GET"])
+@drive_bp.route("/download/<filename>", methods=["GET"])
 def download_file(filename):
     try:
         url = get_file_download_url(filename)
@@ -88,7 +88,7 @@ def download_file(filename):
 
 
 # 🗑️ Delete File
-@drive_bp.route("/drive/<filename>", methods=["DELETE"])
+@drive_bp.route("/<filename>", methods=["DELETE"])
 def delete_file(filename):
     try:
         success = delete_file_from_b2(filename)
@@ -104,7 +104,7 @@ def delete_file(filename):
 
 
 # ✏️ Rename File
-@drive_bp.route("/drive/rename", methods=["POST"])
+@drive_bp.route("/rename", methods=["POST"])
 def rename_file():
     data = request.json or {}
     old_name = data.get("old_name")
@@ -123,7 +123,7 @@ def rename_file():
 
 
 # 📦 Move File to Folder (simulate folder via prefix)
-@drive_bp.route("/drive/move", methods=["POST"])
+@drive_bp.route("/move", methods=["POST"])
 def move_file():
     data = request.json or {}
     filename = data.get("filename")
