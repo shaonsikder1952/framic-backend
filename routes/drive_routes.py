@@ -13,16 +13,16 @@ from uuid import uuid4
 
 drive_bp = Blueprint("drive", __name__)
 
-# === Logging Setup ===
+# === Logging ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("DriveAPI")
 
-# === Temp Folder Setup ===
+# === Temp Folder ===
 TEMP_DIR = "/tmp"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 # === Upload Files ===
-@drive_bp.route("/drive/upload", methods=["POST"])
+@drive_bp.route("/upload", methods=["POST"])
 def upload():
     files = request.files.getlist("file")
     if not files:
@@ -60,7 +60,7 @@ def upload():
     return jsonify(results), 207 if any(r["result"].startswith("❌") for r in results) else 200
 
 # === List Files ===
-@drive_bp.route("/drive/files", methods=["GET"])
+@drive_bp.route("/files", methods=["GET"])
 def list_files():
     try:
         raw_files = list_files_in_b2()
@@ -115,7 +115,7 @@ def list_files():
         return jsonify({"error": str(e)}), 500
 
 # === Download File ===
-@drive_bp.route("/drive/download/<filename>", methods=["GET"])
+@drive_bp.route("/download/<filename>", methods=["GET"])
 def download_file(filename):
     try:
         url = get_file_download_url(filename)
@@ -127,7 +127,7 @@ def download_file(filename):
         return jsonify({"error": str(e)}), 500
 
 # === Delete File ===
-@drive_bp.route("/drive/<filename>", methods=["DELETE"])
+@drive_bp.route("/<filename>", methods=["DELETE"])
 def delete_file(filename):
     try:
         result = delete_file_from_b2(filename)
@@ -142,7 +142,7 @@ def delete_file(filename):
         return jsonify({"filename": filename, "error": str(e)}), 500
 
 # === Rename File ===
-@drive_bp.route("/drive/rename", methods=["POST"])
+@drive_bp.route("/rename", methods=["POST"])
 def rename_file():
     data = request.json or {}
     old_name = data.get("old_name")
@@ -160,7 +160,7 @@ def rename_file():
         return jsonify({"error": str(e)}), 500
 
 # === Move File ===
-@drive_bp.route("/drive/move", methods=["POST"])
+@drive_bp.route("/move", methods=["POST"])
 def move_file():
     data = request.json or {}
     filename = data.get("filename")
