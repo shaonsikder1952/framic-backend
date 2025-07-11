@@ -6,16 +6,16 @@ drive_bp = Blueprint("drive", __name__)
 
 @drive_bp.route("/upload", methods=["POST"])
 def upload():
-    if "file" not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
+    files = request.files.getlist("file")
 
-    file = request.files["file"]
-    file_path = f"/tmp/{file.filename}"
-    file.save(file_path)
+    if not files:
+        return jsonify({"error": "No files uploaded"}), 400
 
-    try:
+    results = []
+    for file in files:
+        file_path = f"/tmp/{file.filename}"
+        file.save(file_path)
         result = upload_file_to_b2(file_path, file.filename)
-        return jsonify({"result": result})
-    finally:
-        if os.path.exists(file_path):
-            os.remove(file_path)  # ✅ Clean up temp file
+        results.append({"filename": file.filename, "result": result})
+
+    return jsonify(results)
