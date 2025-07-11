@@ -1,5 +1,4 @@
 flask
-python-dotenv
-b2sdk
-boto3
 flask-cors
+boto3
+python-dotenv
