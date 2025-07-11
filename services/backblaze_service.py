@@ -3,6 +3,7 @@ import boto3
 import logging
 from dotenv import load_dotenv
 from botocore.exceptions import ClientError
+from datetime import datetime
 
 load_dotenv()
 
@@ -31,6 +32,7 @@ s3 = boto3.client(
 )
 
 # === HELPERS ===
+
 def file_exists(key: str) -> bool:
     try:
         s3.head_object(Bucket=B2_BUCKET, Key=key)
@@ -39,6 +41,24 @@ def file_exists(key: str) -> bool:
         if e.response["Error"]["Code"] == "404":
             return False
         raise
+
+def guess_file_type(filename: str) -> str:
+    ext = filename.lower().split('.')[-1]
+    if ext in ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp']:
+        return 'image'
+    if ext in ['mp4', 'mov', 'avi', 'mkv', 'webm']:
+        return 'video'
+    if ext in ['mp3', 'wav', 'aac', 'm4a', 'ogg']:
+        return 'audio'
+    if ext in ['pdf']:
+        return 'pdf'
+    if ext in ['txt', 'md']:
+        return 'text'
+    if ext in ['doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx']:
+        return 'document'
+    if ext in ['dart', 'js', 'py', 'java', 'c', 'cpp', 'html', 'css']:
+        return 'code'
+    return 'file'
 
 # === MAIN FUNCTIONS ===
 
@@ -66,20 +86,26 @@ def list_files_in_b2():
         for obj in contents:
             key = obj["Key"]
             size = obj["Size"]
+            last_modified = obj["LastModified"]
+            file_type = guess_file_type(key)
             url = get_file_download_url(key)
             if isinstance(url, dict) and "error" in url:
                 url = None
 
             result.append({
-                "filename": key,
+                "name": key,
+                "type": file_type,
                 "size": size,
-                "download_url": url
+                "creationDate": last_modified.isoformat(),
+                "lastModified": last_modified.isoformat(),
+                "download_url": url,
             })
 
+        logger.info(f"✅ Listed {len(result)} file(s) from B2")
         return result
     except Exception as e:
         logger.error("❌ Error listing files", exc_info=True)
-        raise RuntimeError(f"❌ B2 list failed: {str(e)}")
+        return []
 
 def get_file_download_url(filename: str):
     try:
