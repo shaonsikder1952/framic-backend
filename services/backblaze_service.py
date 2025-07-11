@@ -1,3 +1,4 @@
+
 import os
 import boto3
 from dotenv import load_dotenv
@@ -28,35 +29,36 @@ def upload_file_to_b2(file_path, file_key):
 def list_files_in_b2():
     try:
         response = s3.list_objects_v2(Bucket=B2_BUCKET)
-        files = response.get("Contents", [])
-        return [{"filename": obj["Key"], "size": obj["Size"]} for obj in files]
+        contents = response.get("Contents")
+        if contents is None:
+            return []
+        return [{"filename": obj["Key"], "size": obj["Size"]} for obj in contents]
     except Exception as e:
-        return {"error": str(e)}
+        raise RuntimeError(f"B2 list failed: {str(e)}")
 
-def get_file_download_url(file_key, expires_in=3600):
+def get_file_download_url(filename):
     try:
         url = s3.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": B2_BUCKET, "Key": file_key},
-            ExpiresIn=expires_in
+            'get_object',
+            Params={'Bucket': B2_BUCKET, 'Key': filename},
+            ExpiresIn=3600
         )
         return url
     except Exception as e:
         return {"error": str(e)}
 
-def delete_file_from_b2(file_key):
+def delete_file_from_b2(filename):
     try:
-        s3.delete_object(Bucket=B2_BUCKET, Key=file_key)
-        return f"✅ Deleted {file_key}"
+        s3.delete_object(Bucket=B2_BUCKET, Key=filename)
+        return f"✅ Deleted {filename}"
     except Exception as e:
         return f"❌ Delete failed: {str(e)}"
 
 def rename_file_in_b2(old_name, new_name):
     try:
-        copy_source = {"Bucket": B2_BUCKET, "Key": old_name}
         s3.copy_object(
             Bucket=B2_BUCKET,
-            CopySource=copy_source,
+            CopySource={'Bucket': B2_BUCKET, 'Key': old_name},
             Key=new_name
         )
         s3.delete_object(Bucket=B2_BUCKET, Key=old_name)
@@ -64,9 +66,9 @@ def rename_file_in_b2(old_name, new_name):
     except Exception as e:
         return f"❌ Rename failed: {str(e)}"
 
-def move_file_to_folder(file_key, folder_name):
+def move_file_to_folder(filename, target_folder):
     try:
-        new_key = f"{folder_name}/{os.path.basename(file_key)}"
-        return rename_file_in_b2(file_key, new_key)
+        new_key = f"{target_folder}/{filename}"
+        return rename_file_in_b2(filename, new_key)
     except Exception as e:
         return f"❌ Move failed: {str(e)}"
