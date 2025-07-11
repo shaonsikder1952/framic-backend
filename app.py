@@ -1,30 +1,15 @@
-from flask import Flask, request, jsonify
-from werkzeug.utils import secure_filename
-import os
+from flask import Flask
+from flask_cors import CORS
+from routes.drive_routes import drive_bp  # <-- your real routes
 
 app = Flask(__name__)
-UPLOAD_FOLDER = "uploads"
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+CORS(app)
 
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.register_blueprint(drive_bp, url_prefix="/drive")  # <-- connect it properly
 
-@app.route("/upload", methods=["POST"])
-def upload_file():
-    if 'file' not in request.files:
-        return jsonify({"error": "No file part"}), 400
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
-
-    filename = secure_filename(file.filename)
-    file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-    return jsonify({"message": "File uploaded", "filename": filename}), 200
-
-@app.route("/files", methods=["GET"])
-def list_files():
-    files = os.listdir(app.config["UPLOAD_FOLDER"])
-    return jsonify([{"name": f, "type": f.split('.')[-1]} for f in files]), 200
+@app.route("/")
+def home():
+    return "Framic backend is running ✅"
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=10000, debug=True)  # <-- bind to all IPs
