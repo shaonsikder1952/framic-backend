@@ -1,0 +1,4 @@
+flask
+python-dotenv
+b2sdk
+boto3
