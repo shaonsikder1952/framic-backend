@@ -16,6 +16,8 @@ logging.basicConfig(level=logging.INFO)
 
 @drive_bp.route("/upload", methods=["POST"])
 def upload():
+    from uuid import uuid4
+
     files = request.files.getlist("file")
     if not files:
         return jsonify({"error": "No files uploaded"}), 400
@@ -26,17 +28,38 @@ def upload():
             results.append({"filename": None, "result": "❌ Skipped empty filename"})
             continue
         try:
-            file_path = f"/tmp/{file.filename}"
-            file.save(file_path)
-            result = upload_file_to_b2(file_path, file.filename)
-            os.remove(file_path)
-            results.append({"filename": file.filename, "result": result})
-            logging.info(f"✅ Uploaded: {file.filename}")
+            # ✅ Keep original extension
+            original_name = file.filename
+            ext = os.path.splitext(original_name)[1]  # e.g., ".jpg"
+            unique_name = f"{uuid4().hex}{ext}"       # e.g., "b83ad1d9f3844e1e9a0c.jpg"
+
+            # 🔒 Save to temp path
+            temp_path = f"/tmp/{unique_name}"
+            file.save(temp_path)
+
+            # ⬆️ Upload to Backblaze
+            result = upload_file_to_b2(temp_path, unique_name)
+
+            # 🧹 Clean up
+            os.remove(temp_path)
+
+            # ✅ Return uploaded file name
+            results.append({
+                "original": original_name,
+                "filename": unique_name,
+                "result": result
+            })
+            logging.info(f"✅ Uploaded: {unique_name}")
+
         except Exception as e:
-            results.append({"filename": file.filename, "result": f"❌ Failed: {str(e)}"})
+            results.append({
+                "filename": file.filename,
+                "result": f"❌ Failed: {str(e)}"
+            })
             logging.error(f"❌ Upload error: {file.filename} | {e}")
 
     return jsonify(results)
+
 
 @drive_bp.route("/files", methods=["GET"])
 def list_files():

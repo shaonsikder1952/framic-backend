@@ -32,9 +32,23 @@ def list_files_in_b2():
         contents = response.get("Contents")
         if contents is None:
             return []
-        return [{"filename": obj["Key"], "size": obj["Size"]} for obj in contents]
+
+        result = []
+        for obj in contents:
+            key = obj["Key"]
+            size = obj["Size"]
+            url = get_file_download_url(key)
+
+            result.append({
+                "filename": key,
+                "size": size,
+                "download_url": url
+            })
+
+        return result
     except Exception as e:
         raise RuntimeError(f"B2 list failed: {str(e)}")
+
 
 def get_file_download_url(filename):
     try:
