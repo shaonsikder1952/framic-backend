@@ -2,6 +2,7 @@ import os
 import boto3
 import logging
 from dotenv import load_dotenv
+from botocore.exceptions import ClientError
 
 load_dotenv()
 
@@ -14,7 +15,7 @@ B2_REGION = os.getenv("B2_REGION") or "us-west-001"
 
 # === VALIDATE ENV ===
 if not all([B2_BUCKET, B2_ENDPOINT, B2_ACCESS_KEY_ID, B2_SECRET_ACCESS_KEY]):
-    raise EnvironmentError("❌ Missing one or more required Backblaze environment variables.")
+    raise EnvironmentError("❌ Missing required Backblaze environment variables.")
 
 # === LOGGING ===
 logger = logging.getLogger(__name__)
@@ -30,13 +31,14 @@ s3 = boto3.client(
 )
 
 # === HELPERS ===
-
 def file_exists(key: str) -> bool:
     try:
         s3.head_object(Bucket=B2_BUCKET, Key=key)
         return True
-    except:
-        return False
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "404":
+            return False
+        raise
 
 # === MAIN FUNCTIONS ===
 
@@ -44,7 +46,10 @@ def upload_file_to_b2(file_path: str, file_key: str) -> str:
     try:
         if not os.path.exists(file_path):
             return f"❌ File not found: {file_path}"
-        
+
+        if file_exists(file_key):
+            return f"⚠️ File already exists: {file_key}"
+
         s3.upload_file(file_path, B2_BUCKET, file_key)
         logger.info(f"✅ Uploaded {file_key} to {B2_BUCKET}")
         return f"✅ Uploaded {file_key} to {B2_BUCKET}"
@@ -55,15 +60,12 @@ def upload_file_to_b2(file_path: str, file_key: str) -> str:
 def list_files_in_b2():
     try:
         response = s3.list_objects_v2(Bucket=B2_BUCKET)
-        contents = response.get("Contents")
-        if contents is None:
-            return []
-
+        contents = response.get("Contents", [])
         result = []
+
         for obj in contents:
             key = obj["Key"]
             size = obj["Size"]
-
             url = get_file_download_url(key)
             if isinstance(url, dict) and "error" in url:
                 url = None
@@ -93,6 +95,9 @@ def get_file_download_url(filename: str):
 
 def delete_file_from_b2(filename: str) -> str:
     try:
+        if not file_exists(filename):
+            return f"❌ File not found: {filename}"
+
         s3.delete_object(Bucket=B2_BUCKET, Key=filename)
         logger.info(f"✅ Deleted {filename} from {B2_BUCKET}")
         return f"✅ Deleted {filename}"
@@ -115,7 +120,7 @@ def rename_file_in_b2(old_name: str, new_name: str) -> str:
         logger.info(f"✅ Renamed {old_name} to {new_name}")
         return f"✅ Renamed {old_name} to {new_name}"
     except Exception as e:
-        logger.error(f"❌ Rename failed from {old_name} to {new_name}", exc_info=True)
+        logger.error(f"❌ Rename failed: {old_name} → {new_name}", exc_info=True)
         return f"❌ Rename failed: {str(e)}"
 
 def move_file_to_folder(filename: str, target_folder: str) -> str:
@@ -124,5 +129,5 @@ def move_file_to_folder(filename: str, target_folder: str) -> str:
         new_key = f"{safe_folder}/{filename}"
         return rename_file_in_b2(filename, new_key)
     except Exception as e:
-        logger.error(f"❌ Move failed for {filename} → {target_folder}", exc_info=True)
+        logger.error(f"❌ Move failed: {filename} → {target_folder}", exc_info=True)
         return f"❌ Move failed: {str(e)}"

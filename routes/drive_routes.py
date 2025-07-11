@@ -11,19 +11,18 @@ import os
 import logging
 from uuid import uuid4
 
+# === Blueprint Setup ===
 drive_bp = Blueprint("drive", __name__)
 
-# 🚨 Logging Setup
+# === Logging Setup ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("DriveAPI")
 
-# 📁 Config
+# === Temp folder setup ===
 TEMP_DIR = "/tmp"
-if not os.path.exists(TEMP_DIR):
-    os.makedirs(TEMP_DIR)
+os.makedirs(TEMP_DIR, exist_ok=True)
 
-
-# 🚀 Upload Route
+# === Upload Files ===
 @drive_bp.route("/upload", methods=["POST"])
 def upload():
     files = request.files.getlist("file")
@@ -31,7 +30,6 @@ def upload():
         return jsonify({"error": "No files uploaded"}), 400
 
     results = []
-
     for file in files:
         if not file.filename.strip():
             results.append({"filename": None, "result": "❌ Empty filename skipped"})
@@ -46,7 +44,7 @@ def upload():
             upload_result = upload_file_to_b2(temp_path, unique_name)
             os.remove(temp_path)
 
-            logger.info(f"✅ Uploaded: {file.filename} -> {unique_name}")
+            logger.info(f"✅ Uploaded: {file.filename} → {unique_name}")
             results.append({
                 "original": file.filename,
                 "filename": unique_name,
@@ -62,48 +60,79 @@ def upload():
 
     return jsonify(results), 207 if any(r["result"].startswith("❌") for r in results) else 200
 
-
-# 📂 List Files
+# === List Files ===
 @drive_bp.route("/files", methods=["GET"])
 def list_files():
     try:
-        files = list_files_in_b2()
-        return jsonify(files), 200
+        raw_files = list_files_in_b2()
+        result = []
+
+        for obj in raw_files:
+            key = obj.get("Key")
+            size = obj.get("Size", 0)
+            if not key or key.startswith(".") or key.endswith("/"):
+                continue
+
+            ext = os.path.splitext(key)[1].lower()
+            if ext in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]:
+                file_type = "image"
+            elif ext in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
+                file_type = "video"
+            elif ext in [".mp3", ".wav", ".aac", ".m4a", ".ogg"]:
+                file_type = "audio"
+            elif ext in [".pdf"]:
+                file_type = "pdf"
+            elif ext in [".txt", ".md"]:
+                file_type = "text"
+            elif ext in [".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"]:
+                file_type = "document"
+            elif ext in [".py", ".js", ".ts", ".java", ".cpp", ".c", ".html", ".css", ".dart", ".go", ".rs", ".rb"]:
+                file_type = "code"
+            else:
+                file_type = "file"
+
+            download_url = get_file_download_url(key)
+            result.append({
+                "filename": key,
+                "type": file_type,
+                "size": size,
+                "download_url": download_url
+            })
+
+        return jsonify(result), 200
+
     except Exception as e:
         logger.error(f"❌ Error listing files: {e}")
         return jsonify({"error": str(e)}), 500
 
-
-# ⬇️ Generate Download URL
+# === Download URL ===
 @drive_bp.route("/download/<filename>", methods=["GET"])
 def download_file(filename):
     try:
         url = get_file_download_url(filename)
-        if not url:
+        if not url or isinstance(url, dict):
             return jsonify({"error": f"{filename} not found"}), 404
         return jsonify({"download_url": url}), 200
     except Exception as e:
         logger.error(f"❌ Download URL error: {e}")
         return jsonify({"error": str(e)}), 500
 
-
-# 🗑️ Delete File
+# === Delete File ===
 @drive_bp.route("/<filename>", methods=["DELETE"])
 def delete_file(filename):
     try:
-        success = delete_file_from_b2(filename)
-        if success:
+        result = delete_file_from_b2(filename)
+        if result.startswith("✅"):
             logger.info(f"✅ Deleted from B2: {filename}")
-            return jsonify({"filename": filename, "result": "✅ Deleted"}), 200
+            return jsonify({"filename": filename, "result": result}), 200
         else:
-            logger.warning(f"⚠️ File not found in B2: {filename}")
-            return jsonify({"filename": filename, "result": "❌ Not Found"}), 404
+            logger.warning(f"⚠️ File not found or delete failed: {filename}")
+            return jsonify({"filename": filename, "result": result}), 404
     except Exception as e:
-        logger.error(f"❌ Delete error [{filename}]: {e}")
+        logger.error(f"❌ Delete error: {e}")
         return jsonify({"filename": filename, "error": str(e)}), 500
 
-
-# ✏️ Rename File
+# === Rename File ===
 @drive_bp.route("/rename", methods=["POST"])
 def rename_file():
     data = request.json or {}
@@ -115,14 +144,13 @@ def rename_file():
 
     try:
         result = rename_file_in_b2(old_name, new_name)
-        logger.info(f"✅ Renamed: {old_name} -> {new_name}")
+        logger.info(f"✅ Renamed: {old_name} → {new_name}")
         return jsonify({"result": result}), 200
     except Exception as e:
         logger.error(f"❌ Rename error: {e}")
         return jsonify({"error": str(e)}), 500
 
-
-# 📦 Move File to Folder (simulate folder via prefix)
+# === Move File (simulate folders) ===
 @drive_bp.route("/move", methods=["POST"])
 def move_file():
     data = request.json or {}
@@ -130,11 +158,11 @@ def move_file():
     target_folder = data.get("target_folder")
 
     if not filename or not target_folder:
-        return jsonify({"error": "'filename' and 'target_folder' required"}), 400
+        return jsonify({"error": "'filename' and 'target_folder' are required"}), 400
 
     try:
         result = move_file_to_folder(filename, target_folder)
-        logger.info(f"✅ Moved: {filename} -> {target_folder}/")
+        logger.info(f"✅ Moved: {filename} → {target_folder}/")
         return jsonify({"result": result}), 200
     except Exception as e:
         logger.error(f"❌ Move error: {e}")
