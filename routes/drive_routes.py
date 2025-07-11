@@ -59,8 +59,8 @@ def upload():
 
     return jsonify(results), 207 if any(r["result"].startswith("❌") for r in results) else 200
 
-# === List Files ===
-@drive_bp.route("/files", methods=["GET"])
+# === List Files ===# === List Files ===
+@drive_bp.route("/drive/files", methods=["GET"])
 def list_files():
     try:
         raw_files = list_files_in_b2()
@@ -69,7 +69,8 @@ def list_files():
         logger.info(f"📦 Total files fetched from B2: {len(raw_files)}")
 
         for obj in raw_files:
-            key = obj.get("filename") or obj.get("Key")
+            # read from "name" instead of "filename"
+            key = obj.get("name") or obj.get("Key")
             size = obj.get("size") or obj.get("Size", 0)
 
             if not key:
@@ -85,7 +86,7 @@ def list_files():
                 file_type = "video"
             elif ext in [".mp3", ".wav", ".aac", ".m4a", ".ogg"]:
                 file_type = "audio"
-            elif ext in [".pdf"]:
+            elif ext == ".pdf":
                 file_type = "pdf"
             elif ext in [".txt", ".md"]:
                 file_type = "text"
@@ -108,11 +109,13 @@ def list_files():
                 "download_url": url
             })
 
+        logger.info(f"✅ Returning {len(result)} valid files to client.")
         return jsonify(result), 200
 
     except Exception as e:
         logger.error(f"❌ Error listing files: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
 
 # === Download File ===
 @drive_bp.route("/download/<filename>", methods=["GET"])
