@@ -8,120 +8,87 @@ from services.backblaze_service import (
     move_file_to_folder
 )
 import os
+import mimetypes
 import logging
-import re
-from uuid import uuid4
 from werkzeug.utils import secure_filename
 
-# === Blueprint Setup ===
+# === Setup ===
 drive_bp = Blueprint("drive", __name__)
-
-# === Logging Setup ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("DriveAPI")
-
-# === Temp folder setup ===
 TEMP_DIR = "/tmp"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-# === Upload Files ===
+# === Universal Upload ===
 @drive_bp.route("/upload", methods=["POST"])
 def upload():
     files = request.files.getlist("file")
+    folder = request.form.get("folder", "").strip()  # optional subfolder path
+
     if not files:
         return jsonify({"error": "No files uploaded"}), 400
 
     results = []
     for file in files:
-        if not file.filename.strip():
+        filename = file.filename.strip()
+        if not filename:
             results.append({"filename": None, "result": "❌ Empty filename skipped"})
             continue
 
         try:
-            # ✅ Sanitize and preserve original name
-            original_clean = re.sub(r'[^\w\-. ]', '_', file.filename.strip().replace(" ", "_"))
-            short_hash = uuid4().hex[:6]
-            safe_name = f"{short_hash}__{original_clean}"
+            safe_filename = secure_filename(filename)
+            final_key = os.path.join(folder, safe_filename) if folder else safe_filename
 
-            temp_path = os.path.join(TEMP_DIR, safe_name)
+            temp_path = os.path.join(TEMP_DIR, safe_filename)
             file.save(temp_path)
 
-            # ✅ Upload to B2
-            upload_result = upload_file_to_b2(temp_path, safe_name)
+            upload_result = upload_file_to_b2(temp_path, final_key)
             os.remove(temp_path)
 
-            logger.info(f"✅ Uploaded: {file.filename} → {safe_name}")
+            logger.info(f"✅ Uploaded: {final_key}")
             results.append({
-                "original": file.filename,
-                "filename": safe_name,
-                "display_name": original_clean,
+                "original": filename,
+                "filename": final_key,
+                "display_name": filename,
                 "result": upload_result
             })
 
         except Exception as e:
-            logger.error(f"❌ Upload error [{file.filename}]: {e}")
-            results.append({
-                "filename": file.filename,
-                "result": f"❌ Upload failed: {str(e)}"
-            })
+            logger.error(f"❌ Upload error [{filename}]: {e}")
+            results.append({"filename": filename, "result": f"❌ Upload failed: {str(e)}"})
 
     return jsonify(results), 207 if any(r["result"].startswith("❌") for r in results) else 200
 
-
-# === List Files ===
+# === File Listing ===
 @drive_bp.route("/files", methods=["GET"])
 def list_files():
     try:
         raw_files = list_files_in_b2()
         result = []
 
-        logger.info(f"📦 Total files fetched from B2: {len(raw_files)}")
-
         for obj in raw_files:
             key = obj.get("filename") or obj.get("Key")
             size = obj.get("size") or obj.get("Size", 0)
 
             if not key or key.endswith("/"):
-                logger.info(f"📁 Skipping: {key}")
                 continue
 
-            # 🔍 Type detection
-            ext = os.path.splitext(key)[1].lower()
-            if ext in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]:
-                file_type = "image"
-            elif ext in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
-                file_type = "video"
-            elif ext in [".mp3", ".wav", ".aac", ".m4a", ".ogg"]:
-                file_type = "audio"
-            elif ext in [".pdf"]:
-                file_type = "pdf"
-            elif ext in [".txt", ".md"]:
-                file_type = "text"
-            elif ext in [".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"]:
-                file_type = "document"
-            elif ext in [".py", ".js", ".ts", ".java", ".cpp", ".c", ".html", ".css", ".dart", ".go", ".rs", ".rb"]:
-                file_type = "code"
-            else:
-                file_type = "file"
-
+            mime_type, _ = mimetypes.guess_type(key)
+            file_type = mime_type.split("/")[0] if mime_type else "file"
             download_url = get_file_download_url(key)
-            if not download_url or isinstance(download_url, dict):
-                logger.warning(f"❌ No download URL for: {key}")
-                continue
 
-            # ✅ Extract original display name
-            original_display_name = key.split("__", 1)[1] if "__" in key else key
+            if not download_url or isinstance(download_url, dict):
+                continue
 
             result.append({
                 "filename": key,
                 "name": key,
-                "display_name": original_display_name,
+                "display_name": os.path.basename(key),
                 "type": file_type,
                 "size": size,
                 "download_url": download_url
             })
 
-        logger.info(f"✅ Returning {len(result)} valid files to client.")
         return jsonify(result), 200
 
     except Exception as e:
