@@ -23,7 +23,7 @@ TEMP_DIR = "/tmp"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 # === Upload Files ===
-@drive_bp.route("/drive/upload", methods=["POST"])
+@drive_bp.route("/upload", methods=["POST"])
 def upload():
     files = request.files.getlist("file")
     if not files:
