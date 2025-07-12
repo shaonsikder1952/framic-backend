@@ -61,7 +61,8 @@ def upload():
 
     return jsonify(results), 207 if any(r["result"].startswith("❌") for r in results) else 200
 
-# === List Files ===@drive_bp.route("/files", methods=["GET"])
+
+@drive_bp.route("/files", methods=["GET"])
 def list_files():
     try:
         raw_files = list_files_in_b2()
