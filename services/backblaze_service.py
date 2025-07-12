@@ -59,22 +59,22 @@ def upload_file_to_b2(file_path: str, file_key: str) -> str:
 
 def list_files_in_b2():
     try:
-        response = s3.list_objects_v2(Bucket=B2_BUCKET)
-        contents = response.get("Contents", [])
         result = []
+        paginator = s3.get_paginator("list_objects_v2")
 
-        for obj in contents:
-            key = obj["Key"]
-            size = obj["Size"]
-            url = get_file_download_url(key)
-            if isinstance(url, dict) and "error" in url:
-                url = None
+        for page in paginator.paginate(Bucket=B2_BUCKET):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                size = obj["Size"]
+                url = get_file_download_url(key)
+                if isinstance(url, dict) and "error" in url:
+                    url = None
 
-            result.append({
-                "filename": key,
-                "size": size,
-                "download_url": url
-            })
+                result.append({
+                    "filename": key,
+                    "size": size,
+                    "download_url": url
+                })
 
         return result
     except Exception as e:
@@ -126,7 +126,7 @@ def rename_file_in_b2(old_name: str, new_name: str) -> str:
 def move_file_to_folder(filename: str, target_folder: str) -> str:
     try:
         safe_folder = target_folder.strip().rstrip("/")
-        new_key = f"{safe_folder}/{filename}"
+        new_key = f"{safe_folder}/{os.path.basename(filename)}"
         return rename_file_in_b2(filename, new_key)
     except Exception as e:
         logger.error(f"❌ Move failed: {filename} → {target_folder}", exc_info=True)

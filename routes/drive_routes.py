@@ -1,4 +1,15 @@
-from flask import Blueprint, request, jsonify
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.responses import JSONResponse
+from typing import List
+import aiofiles
+import os
+import mimetypes
+import logging
+from celery import Celery
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+from fastapi import Request
 from services.backblaze_service import (
     upload_file_to_b2,
     list_files_in_b2,
@@ -7,90 +18,68 @@ from services.backblaze_service import (
     rename_file_in_b2,
     move_file_to_folder
 )
-import os
-import mimetypes
-import logging
-from werkzeug.utils import secure_filename
 
-# === Setup ===
-drive_bp = Blueprint("drive", __name__)
-logging.basicConfig(level=logging.INFO)
+app = FastAPI()
 logger = logging.getLogger("DriveAPI")
 TEMP_DIR = "/tmp"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-# === Helper to map MIME to app-specific types ===
-def map_mime_type_to_category(mime_type):
-    if not mime_type:
-        return "other"
-    if mime_type.startswith("image/"):
-        return "image"
-    if mime_type.startswith("video/"):
-        return "video"
-    if mime_type.startswith("audio/"):
-        return "audio"
-    if mime_type == "application/pdf":
-        return "pdf"
-    if mime_type in [
-        "application/msword",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/vnd.ms-powerpoint",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "application/vnd.ms-excel",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/rtf",
-        "application/vnd.oasis.opendocument.text",
-    ]:
-        return "document"
-    if mime_type in ["text/plain", "text/markdown", "text/csv", "application/json"]:
-        return "text"
-    if mime_type in ["application/zip", "application/x-rar-compressed", "application/x-7z-compressed"]:
-        return "archive"
-    return "other"
+# Celery setup
+celery_app = Celery(
+    "tasks",
+    broker=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
+    backend=os.getenv("REDIS_URL", "redis://localhost:6379/0")
+)
 
-# === Upload ===
-@drive_bp.route("/upload", methods=["POST"])
-def upload():
-    files = request.files.getlist("file")
-    folder = request.form.get("folder", "").strip()
+# === Celery Tasks ===
+@celery_app.task
+def async_upload_task(temp_path, final_key):
+    return upload_file_to_b2(temp_path, final_key)
 
-    if not files:
-        return jsonify({"error": "No files uploaded"}), 400
+# === Async Upload Endpoint ===
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+@app.post("/upload")
+@limiter.limit("20/minute")
+async def upload(request: Request, files: List[UploadFile] = File(...), folder: str = Form("")):
     results = []
+
     for file in files:
-        filename = file.filename.strip()
-        if not filename:
-            results.append({"filename": None, "result": "❌ Empty filename skipped"})
-            continue
-
         try:
-            safe_filename = secure_filename(filename)
+            filename = file.filename.strip()
+            if not filename:
+                results.append({"filename": None, "result": "❌ Empty filename skipped"})
+                continue
+
+            safe_filename = os.path.basename(filename)
             final_key = os.path.join(folder, safe_filename) if folder else safe_filename
-
             temp_path = os.path.join(TEMP_DIR, safe_filename)
-            file.save(temp_path)
 
-            upload_result = upload_file_to_b2(temp_path, final_key)
-            os.remove(temp_path)
+            async with aiofiles.open(temp_path, 'wb') as out_file:
+                content = await file.read()
+                await out_file.write(content)
 
-            logger.info(f"✅ Uploaded: {final_key}")
+            async_upload_task.delay(temp_path, final_key)
+
+            logger.info(f"📨 Queued for upload: {final_key}")
             results.append({
                 "original": filename,
                 "filename": final_key,
                 "display_name": filename,
-                "result": upload_result
+                "result": "⏳ Upload queued"
             })
 
         except Exception as e:
-            logger.error(f"❌ Upload error [{filename}]: {e}")
-            results.append({"filename": filename, "result": f"❌ Upload failed: {str(e)}"})
+            logger.error(f"❌ Upload error [{file.filename}]: {e}")
+            results.append({"filename": file.filename, "result": f"❌ Upload failed: {str(e)}"})
 
-    return jsonify(results), 207 if any(r["result"].startswith("❌") for r in results) else 200
+    return JSONResponse(status_code=207 if any(r["result"].startswith("❌") for r in results) else 200, content=results)
 
-# === List Files ===
-@drive_bp.route("/files", methods=["GET"])
-def list_files():
+# === Async List Files ===
+@app.get("/files")
+async def list_files():
     try:
         raw_files = list_files_in_b2()
         result = []
@@ -103,7 +92,7 @@ def list_files():
                 continue
 
             mime_type, _ = mimetypes.guess_type(key)
-            file_type = map_mime_type_to_category(mime_type)
+            file_type = mime_type.split("/")[0] if mime_type else "file"
             download_url = get_file_download_url(key)
 
             if not download_url or isinstance(download_url, dict):
@@ -118,72 +107,75 @@ def list_files():
                 "download_url": download_url
             })
 
-        return jsonify(result), 200
+        return JSONResponse(content=result)
 
     except Exception as e:
         logger.error(f"❌ Error listing files: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-# === Download URL ===
-@drive_bp.route("/download/<filename>", methods=["GET"])
-def download_file(filename):
+# === Async Download URL ===
+@app.get("/download/{filename}")
+async def download_file(filename: str):
     try:
-        safe_filename = secure_filename(filename)
+        safe_filename = os.path.basename(filename)
         url = get_file_download_url(safe_filename)
         if not url or isinstance(url, dict):
-            return jsonify({"error": f"{filename} not found"}), 404
-        return jsonify({"download_url": url}), 200
+            raise HTTPException(status_code=404, detail=f"{filename} not found")
+        return {"download_url": url}
     except Exception as e:
         logger.error(f"❌ Download URL error: {e}")
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-# === Delete File ===
-@drive_bp.route("/<filename>", methods=["DELETE"])
-def delete_file(filename):
+# === Async Delete File ===
+@app.delete("/{filename}")
+async def delete_file(filename: str):
     try:
-        safe_filename = secure_filename(filename)
+        safe_filename = os.path.basename(filename)
         result = delete_file_from_b2(safe_filename)
         if result.startswith("✅"):
             logger.info(f"✅ Deleted from B2: {filename}")
-            return jsonify({"filename": filename, "result": result}), 200
+            return {"filename": filename, "result": result}
         else:
-            return jsonify({"filename": filename, "result": result}), 404
+            raise HTTPException(status_code=404, detail=result)
     except Exception as e:
         logger.error(f"❌ Delete error: {e}")
-        return jsonify({"filename": filename, "error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-# === Rename File ===
-@drive_bp.route("/rename", methods=["POST"])
-def rename_file():
-    data = request.json or {}
-    old_name = data.get("old_name")
-    new_name = data.get("new_name")
+# === Async Rename File ===
+@app.post("/rename")
+async def rename_file(payload: dict):
+    old_name = payload.get("old_name")
+    new_name = payload.get("new_name")
 
     if not old_name or not new_name:
-        return jsonify({"error": "Both 'old_name' and 'new_name' are required"}), 400
+        raise HTTPException(status_code=400, detail="Both 'old_name' and 'new_name' are required")
 
     try:
         result = rename_file_in_b2(old_name, new_name)
         logger.info(f"✅ Renamed: {old_name} → {new_name}")
-        return jsonify({"result": result}), 200
+        return {"result": result}
     except Exception as e:
         logger.error(f"❌ Rename error: {e}")
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-# === Move File (simulate folders) ===
-@drive_bp.route("/move", methods=["POST"])
-def move_file():
-    data = request.json or {}
-    filename = data.get("filename")
-    target_folder = data.get("target_folder")
+# === Async Move File (simulate folders) ===
+@app.post("/move")
+async def move_file(payload: dict):
+    filename = payload.get("filename")
+    target_folder = payload.get("target_folder")
 
     if not filename or not target_folder:
-        return jsonify({"error": "'filename' and 'target_folder' are required"}), 400
+        raise HTTPException(status_code=400, detail="'filename' and 'target_folder' are required")
 
     try:
         result = move_file_to_folder(filename, target_folder)
         logger.info(f"✅ Moved: {filename} → {target_folder}/")
-        return jsonify({"result": result}), 200
+        return {"result": result}
     except Exception as e:
         logger.error(f"❌ Move error: {e}")
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    logger.warning(f"🚫 Rate limit exceeded: {request.client.host}")
+    return _rate_limit_exceeded_handler(request, exc)

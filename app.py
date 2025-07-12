@@ -1,24 +1,26 @@
-from flask import Flask
-from flask_cors import CORS
-from routes.drive_routes import drive_bp  # <-- correct import
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from routes.drive_routes import drive_router  # Make sure it's FastAPI router now
 from dotenv import load_dotenv
-load_dotenv()
-
 import os
 
-app = Flask(__name__)
-CORS(app)
+load_dotenv()
 
-# Register blueprint with /drive prefix
-app.register_blueprint(drive_bp, url_prefix="/drive")
+app = FastAPI()
 
-@app.route("/")
-def home():
-    return "✅ Framic backend is live and running!"
+# CORS setup
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # adjust this in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-if __name__ == "__main__":
-    app.run(
-        host="0.0.0.0",  # required for Render
-        port=int(os.environ.get("PORT", 10000)),  # Render injects PORT
-        debug=True
-    )
+# Register router with /drive prefix
+app.include_router(drive_router, prefix="/drive")
+
+# Root route
+@app.get("/")
+async def home():
+    return {"message": "✅ Framic backend is live and running!"}
