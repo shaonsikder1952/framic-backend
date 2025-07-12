@@ -24,3 +24,7 @@ app.include_router(drive_router, prefix="/drive")
 @app.get("/")
 async def home():
     return {"message": "✅ Framic backend is live and running!"}
+
+@app.get("/healthz")
+async def health_check():
+    return {"status": "ok"}
