@@ -158,8 +158,3 @@ async def move_file(payload: dict):
     except Exception as e:
         logger.error(f"❌ Move error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-@drive_router.exception_handler(RateLimitExceeded)
-async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    logger.warning(f"🚫 Rate limit exceeded: {request.client.host}")
-    return _rate_limit_exceeded_handler(request, exc)
