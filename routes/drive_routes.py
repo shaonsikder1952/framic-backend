@@ -9,7 +9,9 @@ from services.backblaze_service import (
 )
 import os
 import logging
+import re
 from uuid import uuid4
+from werkzeug.utils import secure_filename
 
 # === Blueprint Setup ===
 drive_bp = Blueprint("drive", __name__)
@@ -36,19 +38,23 @@ def upload():
             continue
 
         try:
-            ext = os.path.splitext(file.filename)[1]
-            unique_name = f"{uuid4().hex}{ext}"
-            temp_path = os.path.join(TEMP_DIR, unique_name)
+            # ✅ Sanitize and preserve original name
+            original_clean = re.sub(r'[^\w\-. ]', '_', file.filename.strip().replace(" ", "_"))
+            short_hash = uuid4().hex[:6]
+            safe_name = f"{short_hash}__{original_clean}"
+
+            temp_path = os.path.join(TEMP_DIR, safe_name)
             file.save(temp_path)
 
-            upload_result = upload_file_to_b2(temp_path, unique_name)
+            # ✅ Upload to B2
+            upload_result = upload_file_to_b2(temp_path, safe_name)
             os.remove(temp_path)
 
-            logger.info(f"✅ Uploaded: {file.filename} → {unique_name}")
+            logger.info(f"✅ Uploaded: {file.filename} → {safe_name}")
             results.append({
                 "original": file.filename,
-                "filename": unique_name,
-                "display_name": file.filename,
+                "filename": safe_name,
+                "display_name": original_clean,
                 "result": upload_result
             })
 
@@ -62,6 +68,7 @@ def upload():
     return jsonify(results), 207 if any(r["result"].startswith("❌") for r in results) else 200
 
 
+# === List Files ===
 @drive_bp.route("/files", methods=["GET"])
 def list_files():
     try:
@@ -74,13 +81,8 @@ def list_files():
             key = obj.get("filename") or obj.get("Key")
             size = obj.get("size") or obj.get("Size", 0)
 
-            if not key:
-                logger.warning("⚠️ Skipping file with empty key.")
-                continue
-
-            # ⛔ Skip folder keys
-            if key.endswith("/"):
-                logger.info(f"📁 Skipping folder key: {key}")
+            if not key or key.endswith("/"):
+                logger.info(f"📁 Skipping: {key}")
                 continue
 
             # 🔍 Type detection
@@ -107,16 +109,17 @@ def list_files():
                 logger.warning(f"❌ No download URL for: {key}")
                 continue
 
-            logger.info(f"✅ File: {key} | Type: {file_type} | Size: {size}")
+            # ✅ Extract original display name
+            original_display_name = key.split("__", 1)[1] if "__" in key else key
 
             result.append({
-    "filename": key,
-    "name": key,  # 👈 Add this to keep frontend happy
-    "display_name": key,  # 👈 optional — use if you track original
-    "type": file_type,
-    "size": size,
-    "download_url": download_url
-})
+                "filename": key,
+                "name": key,
+                "display_name": original_display_name,
+                "type": file_type,
+                "size": size,
+                "download_url": download_url
+            })
 
         logger.info(f"✅ Returning {len(result)} valid files to client.")
         return jsonify(result), 200
@@ -130,7 +133,8 @@ def list_files():
 @drive_bp.route("/download/<filename>", methods=["GET"])
 def download_file(filename):
     try:
-        url = get_file_download_url(filename)
+        safe_filename = secure_filename(filename)
+        url = get_file_download_url(safe_filename)
         if not url or isinstance(url, dict):
             return jsonify({"error": f"{filename} not found"}), 404
         return jsonify({"download_url": url}), 200
@@ -138,20 +142,22 @@ def download_file(filename):
         logger.error(f"❌ Download URL error: {e}")
         return jsonify({"error": str(e)}), 500
 
+
 # === Delete File ===
 @drive_bp.route("/<filename>", methods=["DELETE"])
 def delete_file(filename):
     try:
-        result = delete_file_from_b2(filename)
+        safe_filename = secure_filename(filename)
+        result = delete_file_from_b2(safe_filename)
         if result.startswith("✅"):
             logger.info(f"✅ Deleted from B2: {filename}")
             return jsonify({"filename": filename, "result": result}), 200
         else:
-            logger.warning(f"⚠️ File not found or delete failed: {filename}")
             return jsonify({"filename": filename, "result": result}), 404
     except Exception as e:
         logger.error(f"❌ Delete error: {e}")
         return jsonify({"filename": filename, "error": str(e)}), 500
+
 
 # === Rename File ===
 @drive_bp.route("/rename", methods=["POST"])
@@ -170,6 +176,7 @@ def rename_file():
     except Exception as e:
         logger.error(f"❌ Rename error: {e}")
         return jsonify({"error": str(e)}), 500
+
 
 # === Move File (simulate folders) ===
 @drive_bp.route("/move", methods=["POST"])
