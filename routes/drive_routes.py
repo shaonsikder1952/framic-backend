@@ -19,11 +19,40 @@ logger = logging.getLogger("DriveAPI")
 TEMP_DIR = "/tmp"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-# === Universal Upload ===
+# === Helper to map MIME to app-specific types ===
+def map_mime_type_to_category(mime_type):
+    if not mime_type:
+        return "other"
+    if mime_type.startswith("image/"):
+        return "image"
+    if mime_type.startswith("video/"):
+        return "video"
+    if mime_type.startswith("audio/"):
+        return "audio"
+    if mime_type == "application/pdf":
+        return "pdf"
+    if mime_type in [
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/rtf",
+        "application/vnd.oasis.opendocument.text",
+    ]:
+        return "document"
+    if mime_type in ["text/plain", "text/markdown", "text/csv", "application/json"]:
+        return "text"
+    if mime_type in ["application/zip", "application/x-rar-compressed", "application/x-7z-compressed"]:
+        return "archive"
+    return "other"
+
+# === Upload ===
 @drive_bp.route("/upload", methods=["POST"])
 def upload():
     files = request.files.getlist("file")
-    folder = request.form.get("folder", "").strip()  # optional subfolder path
+    folder = request.form.get("folder", "").strip()
 
     if not files:
         return jsonify({"error": "No files uploaded"}), 400
@@ -59,7 +88,7 @@ def upload():
 
     return jsonify(results), 207 if any(r["result"].startswith("❌") for r in results) else 200
 
-# === File Listing ===
+# === List Files ===
 @drive_bp.route("/files", methods=["GET"])
 def list_files():
     try:
@@ -74,7 +103,7 @@ def list_files():
                 continue
 
             mime_type, _ = mimetypes.guess_type(key)
-            file_type = mime_type.split("/")[0] if mime_type else "file"
+            file_type = map_mime_type_to_category(mime_type)
             download_url = get_file_download_url(key)
 
             if not download_url or isinstance(download_url, dict):
@@ -95,7 +124,6 @@ def list_files():
         logger.error(f"❌ Error listing files: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
-
 # === Download URL ===
 @drive_bp.route("/download/<filename>", methods=["GET"])
 def download_file(filename):
@@ -108,7 +136,6 @@ def download_file(filename):
     except Exception as e:
         logger.error(f"❌ Download URL error: {e}")
         return jsonify({"error": str(e)}), 500
-
 
 # === Delete File ===
 @drive_bp.route("/<filename>", methods=["DELETE"])
@@ -124,7 +151,6 @@ def delete_file(filename):
     except Exception as e:
         logger.error(f"❌ Delete error: {e}")
         return jsonify({"filename": filename, "error": str(e)}), 500
-
 
 # === Rename File ===
 @drive_bp.route("/rename", methods=["POST"])
@@ -143,7 +169,6 @@ def rename_file():
     except Exception as e:
         logger.error(f"❌ Rename error: {e}")
         return jsonify({"error": str(e)}), 500
-
 
 # === Move File (simulate folders) ===
 @drive_bp.route("/move", methods=["POST"])
